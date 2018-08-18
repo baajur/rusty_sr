@@ -12,7 +12,7 @@ use alumina::ops::regularisation::l2::L2;
 use alumina::ops::loss::robust::Robust;
 use alumina::ops::reduce::reduce_mean::ReduceMean;
 use alumina::ops::nn::linear::Linear;
-use alumina::ops::math::add::Add;
+use alumina::ops::math::mul::Mul;
 
 use alumina::graph::{GraphDef, Result};
 use alumina::id::NodeTag;
@@ -64,29 +64,33 @@ pub fn sr_net_base(factor: usize, log_depth: u32, global_node_factor: usize) -> 
 			0.01,
 			0.01)
 		};
-
+		
+		for jump in jumps.iter(){
+			Conv::new(&active_nodes[active_nodes.len() - jump], &new_conv_node, &[3, 3])
+				.init(Conv::msra(init_weight/jumps.len() as f32)).add_to(&mut g, tag![])?;
+		}
+		Bias::new(&new_conv_node).add_to(&mut g, tag![])?;
 
 		if global_node_factor > 0 {
-			let bias_node = if i < hidden_layers {
-				g.new_node(shape![Unknown, 1, 1, hidden_layer_channels], format!("bias{}", i), tag![])?
-			} else {
-				g.new_node(shape![Unknown, 1, 1, CHANNELS*factor*factor], format!("bias{}", i), tag![])?
-			};
-			
-			Bias::new(&bias_node).add_to(&mut g, tag![])?;
 
-			for jump in jumps.iter(){
-				let j = active_nodes.len() - jump;
-				Conv::new(&active_nodes[j], &new_conv_node, &[3, 3])
-					.init(Conv::msra(init_weight/jumps.len() as f32)).add_to(&mut g, tag![])?;
-				Linear::new(&linear_active_nodes[j], &bias_node).init(Linear::msra(init_weight2/jumps.len() as f32)).add_to(&mut g, tag![])?;
-			}
-			Add::new(&bias_node, &new_conv_node).add_to(&mut g, tag![])?;
-			
 			if i < hidden_layers{
+				let mul_node = if i < hidden_layers {
+					g.new_node(shape![Unknown, 1, 1, hidden_layer_channels], format!("bias{}", i), tag![])?
+				} else {
+					g.new_node(shape![Unknown, 1, 1, CHANNELS*factor*factor], format!("bias{}", i), tag![])?
+				};
+
+				for jump in jumps.iter(){
+					let j = active_nodes.len() - jump;
+					Linear::new(&linear_active_nodes[j], &mul_node).init(Linear::msra(init_weight2/jumps.len() as f32)).add_to(&mut g, tag![])?;
+				}
+
+				let mul_out_node = g.new_node(shape![Unknown, Unknown, Unknown, hidden_layer_channels], format!("activ{}", i), tag![])?;
+				Mul::new(&new_conv_node, &mul_node, &mul_out_node).add_to(&mut g, tag![])?;
+
+
 				let new_active_node = g.new_node(shape![Unknown, Unknown, Unknown, hidden_layer_channels], format!("activ{}", i), tag![])?;
-				Spline::new(&new_conv_node, &new_active_node).shared_axes(&[0, 1, 2]).init(Spline::swan()).add_to(&mut g, tag![])?;
-				
+				Spline::new(&mul_out_node, &new_active_node).shared_axes(&[0, 1, 2]).init(Spline::swan()).add_to(&mut g, tag![])?;
 
 				let avg_node = g.new_node(shape![Unknown, hidden_layer_channels], format!("avg{}", i), tag![])?;
 				let linear_node = g.new_node(shape![Unknown, global_node_factor*hidden_layer_channels], format!("linear{}", i), tag![])?;
@@ -101,13 +105,7 @@ pub fn sr_net_base(factor: usize, log_depth: u32, global_node_factor: usize) -> 
 				linear_active_nodes.push(linear_active_node);
 			}
 
-
 		} else {
-			for jump in jumps.iter(){
-				Conv::new(&active_nodes[active_nodes.len() - jump], &new_conv_node, &[3, 3])
-					.init(Conv::msra(init_weight/jumps.len() as f32)).add_to(&mut g, tag![])?;
-			}
-			Bias::new(&new_conv_node).add_to(&mut g, tag![])?;
 
 			// add activation only for hidden layers
 			if i < hidden_layers{
