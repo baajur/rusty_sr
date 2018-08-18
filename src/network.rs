@@ -54,15 +54,13 @@ pub fn sr_net_base(factor: usize, log_depth: u32, global_node_factor: usize) -> 
 
 	for i in 0..hidden_layers+1{
 		let jumps = (0..).map(|x| 2usize.pow(x)).take_while(|&jump| (i+1)%jump == 0 && jump <= active_nodes.len()).collect::<Vec<_>>();
-		let hidden_layer_channels = 16 * jumps.len();
-		let (new_conv_node, init_weight, init_weight2) = if i < hidden_layers {
-			(g.new_node(shape![Unknown, Unknown, Unknown, hidden_layer_channels], format!("conv{}", i), tag![])?,
-			1.0,
-			0.5)
+		let layer_channels = if i < hidden_layers { 16 * jumps.len() } else {CHANNELS*factor*factor};
+		
+		let new_conv_node = g.new_node(shape![Unknown, Unknown, Unknown, layer_channels], format!("conv{}", i), tag![])?;
+		let (init_weight, init_weight2) = if i < hidden_layers {
+			(1.0, 0.5)
 		} else {
-			(g.new_node(shape![Unknown, Unknown, Unknown, CHANNELS*factor*factor], "expand", tag![])?,
-			0.01,
-			0.01)
+			(0.01, 0.01)
 		};
 		
 		for jump in jumps.iter(){
@@ -73,27 +71,24 @@ pub fn sr_net_base(factor: usize, log_depth: u32, global_node_factor: usize) -> 
 
 		if global_node_factor > 0 {
 
-			let mul_node = if i < hidden_layers {
-				g.new_node(shape![Unknown, 1, 1, hidden_layer_channels], format!("mul{}", i), tag![])?
-			} else {
-				g.new_node(shape![Unknown, 1, 1, CHANNELS*factor*factor], format!("mul{}", i), tag![])?
-			};
+			let mul_node = g.new_node(shape![Unknown, 1, 1, layer_channels], format!("mul{}", i), tag![])?;
 
 			for jump in jumps.iter(){
 				let j = active_nodes.len() - jump;
 				Linear::new(&linear_active_nodes[j], &mul_node).init(Linear::msra(init_weight2/jumps.len() as f32)).add_to(&mut g, tag![])?;
 			}
 
-			let mul_out_node = g.new_node(new_conv_node.shape().clone(), format!("mul_out{}", i), tag![])?;
+			let mul_out_node = g.new_node(shape![Unknown, Unknown, Unknown, layer_channels], format!("mul_out{}", i), tag![])?;
+
 			Mul::new(&new_conv_node, &mul_node, &mul_out_node).add_to(&mut g, tag![])?;
 
 			if i < hidden_layers{
-				let new_active_node = g.new_node(new_conv_node.shape().clone(), format!("activ{}", i), tag![])?;
+				let new_active_node = g.new_node(shape![Unknown, Unknown, Unknown, layer_channels], format!("activ{}", i), tag![])?;
 				Spline::new(&mul_out_node, &new_active_node).shared_axes(&[0, 1, 2]).init(Spline::swan()).add_to(&mut g, tag![])?;
 
-				let avg_node = g.new_node(shape![Unknown, hidden_layer_channels], format!("avg{}", i), tag![])?;
-				let linear_node = g.new_node(shape![Unknown, global_node_factor*hidden_layer_channels], format!("linear{}", i), tag![])?;
-				let linear_active_node = g.new_node(shape![Unknown, global_node_factor*hidden_layer_channels], format!("linear_activ{}", i), tag![])?;
+				let avg_node = g.new_node(shape![Unknown, layer_channels], format!("avg{}", i), tag![])?;
+				let linear_node = g.new_node(shape![Unknown, global_node_factor*layer_channels], format!("linear{}", i), tag![])?;
+				let linear_active_node = g.new_node(shape![Unknown, global_node_factor*layer_channels], format!("linear_activ{}", i), tag![])?;
 
 				ReduceMean::new(&new_active_node, &avg_node).axes(&[1, 2]).add_to(&mut g, tag![])?;
 				Linear::new(&avg_node, &linear_node).init(Linear::msra(init_weight2)).add_to(&mut g, tag![])?;
@@ -109,7 +104,7 @@ pub fn sr_net_base(factor: usize, log_depth: u32, global_node_factor: usize) -> 
 
 			// add activation only for hidden layers
 			if i < hidden_layers{
-				let new_active_node = g.new_node(shape![Unknown, Unknown, Unknown, hidden_layer_channels], format!("activ{}", i), tag![])?;
+				let new_active_node = g.new_node(shape![Unknown, Unknown, Unknown, layer_channels], format!("activ{}", i), tag![])?;
 				Spline::new(&new_conv_node, &new_active_node).shared_axes(&[0, 1, 2]).init(Spline::swan()).add_to(&mut g, tag![])?;
 				active_nodes.push(new_active_node);
 			}
